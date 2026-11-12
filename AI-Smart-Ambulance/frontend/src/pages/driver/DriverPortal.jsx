@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useEmergency } from "../../context/EmergencyContext";
 import EmergencyMap from "../../components/map/EmergencyMap";
 import {
@@ -21,6 +21,7 @@ export default function DriverPortal() {
     driverEmergency,
     driverHospital,
     advanceTripStatus,
+    startHospitalTransport,
     ambulances,
     setDriverVehicleId,
     dispatchAmbulance,
@@ -29,6 +30,14 @@ export default function DriverPortal() {
   } = useEmergency();
 
   const [isOnDuty, setIsOnDuty] = useState(true);
+  const [showHospitalPrompt, setShowHospitalPrompt] = useState(false);
+  const [isStartingHospitalTrip, setIsStartingHospitalTrip] = useState(false);
+  const [hospitalNavigationError, setHospitalNavigationError] = useState("");
+
+  useEffect(() => {
+    setShowHospitalPrompt(driverActiveTrip?.status === "ARRIVED_AT_PATIENT");
+    setHospitalNavigationError("");
+  }, [driverActiveTrip?.id, driverActiveTrip?.status]);
 
   // Stepper definition
   const STEPS = [
@@ -47,6 +56,14 @@ export default function DriverPortal() {
 
   const handleNextStep = async () => {
     if (!driverActiveTrip) return;
+    if (driverActiveTrip.status === "ARRIVED_AT_PATIENT") {
+      setShowHospitalPrompt(true);
+      return;
+    }
+    if (driverActiveTrip.status === "PATIENT_PICKED_UP") {
+      setShowHospitalPrompt(true);
+      return;
+    }
     const nextIndex = currentStatusIndex + 1;
     if (nextIndex < STEPS.length) {
       const nextStatus = STEPS[nextIndex].key;
@@ -61,9 +78,9 @@ export default function DriverPortal() {
       case "EN_ROUTE":
         return "📍 MARK ARRIVED AT PATIENT LOCATION";
       case "ARRIVED_AT_PATIENT":
-        return "🚑 PATIENT STABILIZED & SECURED ONBOARD";
+        return "🏥 OPEN HOSPITAL TRANSFER";
       case "PATIENT_PICKED_UP":
-        return "🏥 COMMENCE TRANSIT TO HOSPITAL";
+        return "🏥 START HOSPITAL ROUTE";
       case "EN_ROUTE_TO_HOSPITAL":
         return "🏁 MARK ARRIVED AT HOSPITAL ER";
       case "ARRIVED_AT_HOSPITAL":
@@ -88,7 +105,23 @@ export default function DriverPortal() {
     }
   };
 
+  const handleStartHospitalTransport = async () => {
+    if (!driverActiveTrip) return;
+    setIsStartingHospitalTrip(true);
+    setHospitalNavigationError("");
+    try {
+      await startHospitalTransport(driverActiveTrip.id);
+      setShowHospitalPrompt(false);
+    } catch (error) {
+      console.error("Could not start hospital transport:", error);
+      setHospitalNavigationError(error.message || "Could not calculate the hospital route.");
+    } finally {
+      setIsStartingHospitalTrip(false);
+    }
+  };
+
   return (
+    <>
     <div className="driver-grid">
       {/* Left Column: Driver Control Panel */}
       <div style={{ display: "flex", flexDirection: "column", gap: "1.25rem", overflowY: "auto" }}>
@@ -327,8 +360,63 @@ export default function DriverPortal() {
               : null
           }
           showRoute={true}
+          fitRoute={true}
         />
       </div>
     </div>
+    {showHospitalPrompt && driverActiveTrip && (
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="hospital-navigation-title"
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 10000,
+          background: "rgba(2, 6, 23, 0.8)",
+          backdropFilter: "blur(6px)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "1rem",
+        }}
+      >
+        <div className="glass-panel" style={{ maxWidth: "460px", width: "100%", padding: "1.5rem" }}>
+          <div className="panel-title" id="hospital-navigation-title">
+            <Building2 size={20} color="#38bdf8" />
+            Patient arrived — start hospital transfer?
+          </div>
+          <p style={{ color: "#cbd5e1", fontSize: "0.9rem", margin: "1rem 0" }}>
+            Confirm the patient is onboard. Navigation will connect to{" "}
+            <strong style={{ color: "#38bdf8" }}>
+              {driverHospital?.name || "the nearest suitable hospital"}
+            </strong>{" "}
+            using the fastest available route alternative.
+          </p>
+          {hospitalNavigationError && (
+            <p role="alert" style={{ color: "#f87171", fontSize: "0.82rem" }}>
+              {hospitalNavigationError}
+            </p>
+          )}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.6rem" }}>
+            <button
+              className="btn btn-outline"
+              onClick={() => setShowHospitalPrompt(false)}
+              disabled={isStartingHospitalTrip}
+            >
+              Not yet
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={handleStartHospitalTransport}
+              disabled={isStartingHospitalTrip}
+            >
+              {isStartingHospitalTrip ? "Finding route..." : "Patient onboard — navigate"}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

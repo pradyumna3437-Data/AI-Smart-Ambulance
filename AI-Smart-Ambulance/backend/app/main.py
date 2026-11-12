@@ -4,13 +4,37 @@ logging.basicConfig(level=logging.INFO)
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.database import Base, engine
+from app.database import Base, SessionLocal, engine
 from app.middleware.error_handler import register_error_handlers
+from app.models.user import User, UserRole
 from app.routes import auth, users, drivers, ambulances, emergencies, hospitals, trips, routes as route_router, admin
+from app.utils.security import hash_password
+
+
+def seed_demo_users() -> None:
+    db = SessionLocal()
+    try:
+        if db.query(User).count() > 0:
+            return
+
+        demo_users = [
+            User(name="Citizen Demo", email="citizen@example.com", phone="+91 90000 11111",
+                 password_hash=hash_password("testpass123"), role=UserRole.USER),
+            User(name="Driver Demo", email="driver1@example.com", phone="+91 90000 22222",
+                 password_hash=hash_password("testpass123"), role=UserRole.DRIVER),
+            User(name="Admin Demo", email="admin@example.com", phone="+91 90000 33333",
+                 password_hash=hash_password("testpass123"), role=UserRole.ADMIN),
+        ]
+        db.add_all(demo_users)
+        db.commit()
+    finally:
+        db.close()
+
 
 # Creates tables if they don't exist yet. For anything beyond local dev,
 # use database/schema.sql (source of truth) instead of relying on this.
 Base.metadata.create_all(bind=engine)
+seed_demo_users()
 
 app = FastAPI(
     title="AI Smart Ambulance API",

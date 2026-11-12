@@ -9,6 +9,11 @@ from app.services.trip_service import create_trip, update_trip_status
 router = APIRouter()
 
 
+@router.get("/", response_model=list[TripOut])
+def list_trips(db: Session = Depends(get_db)):
+    return db.query(Trip).order_by(Trip.id.desc()).all()
+
+
 @router.post("/", response_model=TripOut)
 def create(payload: TripCreate, db: Session = Depends(get_db)):
     return create_trip(db, payload.emergency_id, payload.ambulance_id, payload.hospital_id)

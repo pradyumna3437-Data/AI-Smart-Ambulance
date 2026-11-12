@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from "react";
 import { useEmergency } from "../../context/EmergencyContext";
 import EmergencyMap from "../../components/map/EmergencyMap";
+import { calculateDistanceKm } from "../../services/mockData";
+import { apiService } from "../../services/api";
 import {
   Ambulance,
   Phone,
@@ -20,7 +22,6 @@ import {
   Flame,
   ArrowRight,
   ExternalLink,
-  ChevronRight,
   Sparkles,
 } from "lucide-react";
 
@@ -30,9 +31,11 @@ export default function AmbulanceTracking() {
     citizenEmergency,
     ambulances,
     hospitals,
+    trips,
+    activeRoute,
     userLocation,
     cancelCitizenEmergency,
-    advanceTripStatus,
+    setDriverVehicleId,
     setCurrentRole,
   } = useEmergency();
 
@@ -71,36 +74,255 @@ export default function AmbulanceTracking() {
       icu_available: true,
     };
 
+  const activeTrip =
+    trips.find(
+      (trip) =>
+        activeBooking?.trip?.id != null &&
+        String(trip.id) === String(activeBooking.trip.id)
+    ) ||
+    trips.find((trip) => String(trip.emergency_id) === String(emergency.id)) ||
+    activeBooking?.trip ||
+    null;
+  const isHospitalLeg = activeTrip?.status === "EN_ROUTE_TO_HOSPITAL";
+  const ambulanceIsMoving = ["ACCEPTED", "EN_ROUTE", "EN_ROUTE_TO_HOSPITAL"].includes(
+    activeTrip?.status
+  );
+  const tripStage =
+    ["ACCEPTED", "EN_ROUTE"].includes(activeTrip?.status)
+      ? 1
+      : activeTrip?.status === "ARRIVED_AT_PATIENT"
+        ? 2
+        : ["PATIENT_PICKED_UP", "EN_ROUTE_TO_HOSPITAL"].includes(activeTrip?.status)
+          ? 3
+          : ["ARRIVED_AT_HOSPITAL", "COMPLETED"].includes(activeTrip?.status)
+            ? 4
+            : 0;
+  const stages = [
+    { label: "Dispatch Confirmed", desc: "AI matched nearest vehicle" },
+    { label: "Ambulance En Route", desc: "Priority Green Wave active" },
+    { label: "Arrived at Patient", desc: "Paramedic team on site" },
+    { label: "Transit to Hospital", desc: "Telemetry stream to ER" },
+    { label: "Admitted at Hospital", desc: "Care handed to trauma team" },
+  ];
+  const [hospitalRoutePoints, setHospitalRoutePoints] = useState(null);
+  const routePoints = isHospitalLeg
+    ? hospitalRoutePoints
+    : activeBooking?.routePoints || activeRoute;
+
   // Tracking Simulation State
-  const [secondsRemaining, setSecondsRemaining] = useState(240); // 4 minutes
   const [distanceKm, setDistanceKm] = useState(2.3);
-  const [speedKmh, setSpeedKmh] = useState(54);
-  const [tripStage, setTripStage] = useState(1); // 0: Requested, 1: Dispatched/En Route, 2: Arrived, 3: In Transit, 4: Admitted
+  const speedKmh = 54;
   const [isCopied, setIsCopied] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [trackedAmbulanceLocation, setTrackedAmbulanceLocation] = useState(null);
+  const [routeProgress, setRouteProgress] = useState(0);
 
-  // Live countdown timer & distance decrease
   useEffect(() => {
-    const timer = setInterval(() => {
-      setSecondsRemaining((prev) => {
-        if (prev <= 1) {
-          setTripStage(2); // Arrived
-          return 0;
+    if (!isHospitalLeg) {
+      setHospitalRoutePoints(null);
+      return undefined;
+    }
+
+    if (Array.isArray(activeRoute) && activeRoute.length > 1) {
+      const routeStartsAtPatient =
+        calculateDistanceKm(
+          activeRoute[0][0],
+          activeRoute[0][1],
+          emergency.latitude,
+          emergency.longitude
+        ) < 0.3;
+      const routeEndsAtHospital =
+        calculateDistanceKm(
+          activeRoute[activeRoute.length - 1][0],
+          activeRoute[activeRoute.length - 1][1],
+          destinationHospital.latitude,
+          destinationHospital.longitude
+        ) < 0.3;
+      if (routeStartsAtPatient && routeEndsAtHospital) {
+        setHospitalRoutePoints(activeRoute);
+        return undefined;
+      }
+    }
+
+    let cancelled = false;
+    setHospitalRoutePoints(null);
+    apiService
+      .getRoute(
+        emergency.latitude,
+        emergency.longitude,
+        destinationHospital.latitude,
+        destinationHospital.longitude,
+        true
+      )
+      .then((route) => {
+        if (cancelled) return;
+        if (route?.points?.length > 1) {
+          setHospitalRoutePoints(route.points);
+        } else {
+          console.error("Hospital route did not contain usable route points.");
         }
-        return prev - 1;
+      })
+      .catch((error) => {
+        console.error("Failed to load hospital route:", error);
       });
 
-      setDistanceKm((prev) => {
-        if (prev <= 0.1) return 0;
-        return parseFloat((prev - 0.01).toFixed(2));
-      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    isHospitalLeg,
+    activeRoute,
+    emergency.latitude,
+    emergency.longitude,
+    destinationHospital.latitude,
+    destinationHospital.longitude,
+  ]);
 
-      // Realistic speed fluctuation
-      setSpeedKmh(Math.floor(48 + Math.random() * 12));
-    }, 1000);
+  // Move the dispatched unit along the current leg and discard the route behind it.
+  useEffect(() => {
+    const startLat = Number(assignedAmbulance.latitude);
+    const startLng = Number(assignedAmbulance.longitude);
+    const patientLat = Number(emergency.latitude);
+    const patientLng = Number(emergency.longitude);
+    const hospitalLat = Number(destinationHospital.latitude);
+    const hospitalLng = Number(destinationHospital.longitude);
+    if (![startLat, startLng, patientLat, patientLng].every(Number.isFinite)) return undefined;
 
-    return () => clearInterval(timer);
-  }, []);
+    const target =
+      isHospitalLeg && Number.isFinite(hospitalLat) && Number.isFinite(hospitalLng)
+        ? [hospitalLat, hospitalLng]
+        : [patientLat, patientLng];
+    const stoppedAt = ["ARRIVED_AT_PATIENT", "PATIENT_PICKED_UP"].includes(activeTrip?.status)
+      ? [patientLat, patientLng]
+      : ["ARRIVED_AT_HOSPITAL", "COMPLETED"].includes(activeTrip?.status) &&
+          Number.isFinite(hospitalLat) &&
+          Number.isFinite(hospitalLng)
+        ? [hospitalLat, hospitalLng]
+        : isHospitalLeg
+          ? [patientLat, patientLng]
+          : [startLat, startLng];
+
+    const route = Array.isArray(routePoints)
+      ? routePoints.filter(
+          (point) =>
+            Array.isArray(point) &&
+            point.length >= 2 &&
+            Number.isFinite(point[0]) &&
+            Number.isFinite(point[1])
+        )
+      : [];
+
+    if (!ambulanceIsMoving || route.length < 2) {
+      setTrackedAmbulanceLocation(stoppedAt);
+      setRouteProgress(0);
+      setDistanceKm(calculateDistanceKm(stoppedAt[0], stoppedAt[1], target[0], target[1]));
+      return undefined;
+    }
+
+    const routeDistanceKm = route.slice(1).reduce(
+      (distance, point, index) =>
+        distance +
+        calculateDistanceKm(
+          route[index][0],
+          route[index][1],
+          point[0],
+          point[1]
+        ),
+      0
+    );
+    const travelDurationMs =
+      routeDistanceKm > 0 ? (routeDistanceKm / speedKmh) * 3600000 : 240000;
+    const startedAt = Date.now();
+    setRouteProgress(0);
+    const updateLocation = () => {
+      const progress = Math.min((Date.now() - startedAt) / travelDurationMs, 1);
+      const routePosition = progress * (route.length - 1);
+      const segmentIndex = Math.min(Math.floor(routePosition), route.length - 2);
+      const segmentProgress = routePosition - segmentIndex;
+      const from = route[segmentIndex];
+      const to = route[segmentIndex + 1];
+      const lat = from[0] + (to[0] - from[0]) * segmentProgress;
+      const lng = from[1] + (to[1] - from[1]) * segmentProgress;
+
+      setTrackedAmbulanceLocation([lat, lng]);
+      setRouteProgress(progress);
+      setDistanceKm(calculateDistanceKm(lat, lng, target[0], target[1]));
+    };
+
+    updateLocation();
+    const interval = setInterval(updateLocation, 1000);
+    return () => clearInterval(interval);
+  }, [
+    ambulanceIsMoving,
+    activeTrip?.status,
+    assignedAmbulance.latitude,
+    assignedAmbulance.longitude,
+    emergency.latitude,
+    emergency.longitude,
+    destinationHospital.latitude,
+    destinationHospital.longitude,
+    isHospitalLeg,
+    routePoints,
+    speedKmh,
+  ]);
+
+  const isStoppedAtPatient = ["ARRIVED_AT_PATIENT", "PATIENT_PICKED_UP"].includes(
+    activeTrip?.status
+  );
+  const isStoppedAtHospital = ["ARRIVED_AT_HOSPITAL", "COMPLETED"].includes(
+    activeTrip?.status
+  );
+  const routeToDisplay =
+    isStoppedAtPatient || isStoppedAtHospital
+      ? []
+      : isHospitalLeg && !routePoints
+        ? []
+      : ambulanceIsMoving && Array.isArray(routePoints) && routePoints.length > 1
+        ? [
+            trackedAmbulanceLocation || routePoints[0],
+            ...routePoints.slice(
+              Math.floor(routeProgress * (routePoints.length - 1)) + 1
+            ),
+          ]
+        : routePoints;
+
+  const mapStatusLabel = isHospitalLeg
+    ? "EN ROUTE TO HOSPITAL"
+    : isStoppedAtPatient
+      ? "ARRIVED AT PATIENT"
+      : isStoppedAtHospital
+        ? "ARRIVED AT HOSPITAL"
+        : ambulanceIsMoving
+          ? "ROUTE UPDATING"
+          : "WAITING FOR DRIVER";
+
+  const remainingRouteDistanceKm = (() => {
+    if (!Array.isArray(routePoints) || routePoints.length < 2) return distanceKm;
+    const progress = Math.max(0, Math.min(routeProgress, 1));
+    const routePosition = progress * (routePoints.length - 1);
+    const segmentIndex = Math.min(
+      Math.floor(routePosition),
+      routePoints.length - 2
+    );
+    const segmentProgress = routePosition - segmentIndex;
+    const from = routePoints[segmentIndex];
+    const to = routePoints[segmentIndex + 1];
+    let remaining =
+      calculateDistanceKm(from[0], from[1], to[0], to[1]) *
+      (1 - segmentProgress);
+    for (let index = segmentIndex + 1; index < routePoints.length - 1; index++) {
+      remaining += calculateDistanceKm(
+        routePoints[index][0],
+        routePoints[index][1],
+        routePoints[index + 1][0],
+        routePoints[index + 1][1]
+      );
+    }
+    return Number(remaining.toFixed(2));
+  })();
+  const estimatedArrivalSeconds = Math.ceil(
+    (remainingRouteDistanceKm / speedKmh) * 3600
+  );
 
   // Format seconds to mm:ss
   const formatTime = (secs) => {
@@ -109,27 +331,17 @@ export default function AmbulanceTracking() {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
   };
 
-  const stages = [
-    { label: "Dispatch Confirmed", desc: "AI matched nearest vehicle" },
-    { label: "Ambulance En Route", desc: "Priority Green Wave active" },
-    { label: "Arrived at Patient", desc: "Paramedic team on site" },
-    { label: "Transit to Hospital", desc: "Telemetry stream to ER" },
-    { label: "Admitted at Hospital", desc: "Care handed to trauma team" },
-  ];
-
   const handleCopyLink = () => {
     navigator.clipboard?.writeText?.(window.location.href);
     setIsCopied(true);
     setTimeout(() => setIsCopied(false), 2500);
   };
 
-  const handleSimulateNextStage = () => {
-    if (tripStage < stages.length - 1) {
-      setTripStage((s) => s + 1);
-      if (tripStage === 0) setSecondsRemaining(180);
-      if (tripStage === 1) setSecondsRemaining(30);
-      if (tripStage === 2) setSecondsRemaining(300);
+  const handleOpenDriverConsole = () => {
+    if (assignedAmbulance?.id != null) {
+      setDriverVehicleId(assignedAmbulance.id);
     }
+    setCurrentRole("DRIVER");
   };
 
   return (
@@ -170,7 +382,15 @@ export default function AmbulanceTracking() {
               </span>
               <span className="badge badge-critical" style={{ fontSize: "0.72rem" }}>
                 <span className="pulse-dot" style={{ display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", background: "#fff", marginRight: "5px" }}></span>
-                {tripStage === 2 ? "AMBULANCE ARRIVED" : "EN ROUTE • PRIORITY ONE"}
+                {tripStage === 2
+                  ? "AMBULANCE ARRIVED"
+                  : tripStage === 4
+                    ? "ARRIVED AT HOSPITAL"
+                    : isHospitalLeg
+                      ? "EN ROUTE TO HOSPITAL"
+                      : ambulanceIsMoving
+                        ? "EN ROUTE • PRIORITY ONE"
+                        : "WAITING FOR DRIVER"}
               </span>
               <span style={{ fontSize: "0.75rem", color: "#94a3b8", fontFamily: "var(--font-mono)" }}>
                 #EMG-{emergency.id || 101}
@@ -194,15 +414,17 @@ export default function AmbulanceTracking() {
             <span>{isCopied ? "Link Copied!" : "Share Tracker"}</span>
           </button>
 
-          <button
-            onClick={handleSimulateNextStage}
-            className="btn btn-outline"
-            style={{ fontSize: "0.75rem", padding: "0.45rem 0.8rem", borderColor: "rgba(56, 189, 248, 0.4)", color: "#38bdf8" }}
-            title="Simulate Next Dispatch Step"
-          >
-            <ChevronRight size={14} />
-            <span>Step: {stages[Math.min(tripStage + 1, stages.length - 1)].label}</span>
-          </button>
+          {activeTrip?.status === "ASSIGNED" && (
+            <button
+              onClick={handleOpenDriverConsole}
+              className="btn btn-outline"
+              style={{ fontSize: "0.75rem", padding: "0.45rem 0.8rem", borderColor: "rgba(56, 189, 248, 0.4)", color: "#38bdf8" }}
+              title="Open the assigned driver's console to accept this dispatch"
+            >
+              <Navigation size={14} />
+              <span>Open Driver Console to Accept</span>
+            </button>
+          )}
 
           <button
             onClick={() => setShowCancelModal(true)}
@@ -240,7 +462,8 @@ export default function AmbulanceTracking() {
           >
             <Radio size={14} color="#10b981" className="pulse-dot" />
             <span style={{ fontSize: "0.75rem", color: "#f8fafc", fontWeight: "600" }}>
-              Live GPS Feed: <span style={{ color: "#38bdf8" }}>{assignedAmbulance.vehicle_number}</span>
+              {mapStatusLabel}:{" "}
+              <span style={{ color: "#38bdf8" }}>{assignedAmbulance.vehicle_number}</span>
             </span>
           </div>
 
@@ -249,6 +472,12 @@ export default function AmbulanceTracking() {
               focusCenter={[emergency.latitude, emergency.longitude]}
               customHeight="100%"
               showRoute={true}
+              fitRoute={true}
+              fitRoutePoints={routePoints || []}
+              routeOverride={routeToDisplay || []}
+              followLocation={ambulanceIsMoving}
+              trackedAmbulanceId={assignedAmbulance.id}
+              trackedAmbulanceLocation={trackedAmbulanceLocation}
               patientLocation={{
                 lat: emergency.latitude,
                 lng: emergency.longitude,
@@ -278,16 +507,30 @@ export default function AmbulanceTracking() {
                   style={{
                     fontSize: "2.5rem",
                     fontWeight: "900",
-                    color: tripStage === 2 ? "#10b981" : "#38bdf8",
+                    color: tripStage === 2 || tripStage === 4 ? "#10b981" : "#38bdf8",
                     fontFamily: "var(--font-mono)",
                     lineHeight: 1.1,
                     margin: "4px 0",
                   }}
                 >
-                  {tripStage === 2 ? "ARRIVED" : formatTime(secondsRemaining)}
+                  {tripStage === 2
+                    ? "ARRIVED"
+                    : tripStage === 4
+                      ? "AT HOSPITAL"
+                      : ambulanceIsMoving
+                        ? estimatedArrivalSeconds <= 5
+                          ? "ARRIVING"
+                          : formatTime(estimatedArrivalSeconds)
+                        : "WAITING"}
                 </div>
                 <div style={{ fontSize: "0.78rem", color: "#cbd5e1" }}>
-                  {tripStage === 2 ? "Paramedic team is at your location" : `Approximately ${distanceKm} km away from your location`}
+                  {tripStage === 2
+                    ? "Paramedic team is at your location"
+                    : tripStage === 4
+                      ? `Arrived at ${destinationHospital.name}`
+                      : ambulanceIsMoving
+                        ? `Approximately ${remainingRouteDistanceKm} km to ${isHospitalLeg ? "the hospital" : "your location"}`
+                        : "ETA starts when the driver accepts the dispatch"}
                 </div>
               </div>
 
@@ -302,7 +545,7 @@ export default function AmbulanceTracking() {
               >
                 <div style={{ fontSize: "0.7rem", color: "#94a3b8" }}>CURRENT SPEED</div>
                 <div style={{ fontSize: "1.2rem", fontWeight: "700", color: "#10b981", fontFamily: "var(--font-mono)" }}>
-                  {speedKmh} <span style={{ fontSize: "0.7rem" }}>KM/H</span>
+                  {ambulanceIsMoving ? speedKmh : 0} <span style={{ fontSize: "0.7rem" }}>KM/H</span>
                 </div>
                 <div style={{ fontSize: "0.65rem", color: "#38bdf8" }}>Priority Green Corridor</div>
               </div>

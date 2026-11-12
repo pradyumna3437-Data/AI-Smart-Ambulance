@@ -15,8 +15,9 @@ def register_user(db: Session, name: str, email: str, phone: str | None, passwor
     return user
 
 
-def authenticate_user(db: Session, email: str, password: str) -> str:
+def authenticate_user(db: Session, email: str, password: str) -> tuple[str, User]:
     user = db.query(User).filter(User.email == email).first()
     if not user or not verify_password(password, user.password_hash):
         raise ValueError("Invalid email or password")
-    return create_access_token({"sub": str(user.id), "role": user.role.value, "email": user.email})
+    token = create_access_token({"sub": str(user.id), "role": user.role.value, "email": user.email})
+    return token, user

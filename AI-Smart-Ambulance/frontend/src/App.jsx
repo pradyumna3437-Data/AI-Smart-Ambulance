@@ -6,6 +6,7 @@ import DriverPortal from "./pages/driver/DriverPortal";
 import AdminPortal from "./pages/admin/AdminPortal";
 import AmbulanceTracking from "./pages/tracking/AmbulanceTracking";
 import DirectSosModal from "./components/emergency/DirectSosModal";
+import AuthModal from "./pages/auth/AuthModal";
 import { Siren } from "lucide-react";
 
 function MainPortal() {
@@ -23,6 +24,7 @@ function MainPortal() {
 
 function AppContent() {
   const [isDirectSosOpen, setIsDirectSosOpen] = useState(false);
+  const { isAuthModalOpen, setIsAuthModalOpen } = useEmergency();
 
   return (
     <div className="app-container">
@@ -47,6 +49,12 @@ function AppContent() {
       <DirectSosModal
         isOpen={isDirectSosOpen}
         onClose={() => setIsDirectSosOpen(false)}
+      />
+
+      {/* Auth Modal (Login / Register) */}
+      <AuthModal
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
       />
     </div>
   );

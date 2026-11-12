@@ -14,6 +14,8 @@ const TIMEOUT_MS = 2500;
 let simEmergencies = [...MOCK_EMERGENCIES];
 let simAmbulances = [...MOCK_AMBULANCES];
 let simHospitals = [...MOCK_HOSPITALS];
+const localEmergencyIds = new Set();
+const localTripIds = new Set();
 let simTrips = [
   {
     id: 501,
@@ -50,6 +52,29 @@ async function fetchWithTimeout(url, options = {}) {
 let backendOnlineCached = false;
 let lastHealthCheckTime = 0;
 
+async function authRequest(endpoint, payload, fallbackError) {
+  let response;
+  try {
+    response = await fetchWithTimeout(`${API_BASE}/auth/${endpoint}`, {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  } catch (error) {
+    if (error.name === "AbortError") {
+      throw new Error("Authentication request timed out. Please try again.");
+    }
+    throw new Error(
+      "Authentication service is unavailable. Start the backend on port 8000 and try again."
+    );
+  }
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.detail || fallbackError);
+  }
+  return response.json();
+}
+
 export const apiService = {
   // Check whether backend is online
   async checkHealth() {
@@ -71,10 +96,67 @@ export const apiService = {
   // Set active location & cluster dynamic emergency infrastructure
   setSimulationLocation(lat, lng, placeName) {
     const infra = generateLocalEmergencyInfrastructure(lat, lng, placeName);
-    simHospitals = [...infra.hospitals];
-    simAmbulances = [...infra.ambulances];
-    simEmergencies = [...infra.emergencies];
-    simTrips = [];
+    const activeTrips = simTrips.filter(
+      (trip) => trip.status !== "COMPLETED" && trip.status !== "CANCELLED"
+    );
+    const activeEmergencyIds = new Set([
+      ...activeTrips.map((trip) => String(trip.emergency_id)),
+      ...localEmergencyIds,
+    ]);
+    const activeAmbulanceIds = new Set(
+      activeTrips
+        .map((trip) => trip.ambulance_id)
+        .filter((id) => id != null)
+        .map(String)
+    );
+    const activeHospitalIds = new Set(
+      activeTrips
+        .map((trip) => trip.hospital_id)
+        .filter((id) => id != null)
+        .map(String)
+    );
+
+    const activeEmergencies = simEmergencies.filter((emergency) =>
+      activeEmergencyIds.has(String(emergency.id))
+    );
+    const activeAmbulances = simAmbulances.filter((ambulance) =>
+      activeAmbulanceIds.has(String(ambulance.id))
+    );
+    const activeHospitals = simHospitals.filter((hospital) =>
+      activeHospitalIds.has(String(hospital.id))
+    );
+
+    simHospitals = [
+      ...infra.hospitals.filter(
+        (hospital) => !activeHospitalIds.has(String(hospital.id))
+      ),
+      ...activeHospitals,
+    ];
+    simAmbulances = [
+      ...infra.ambulances.filter(
+        (ambulance) => !activeAmbulanceIds.has(String(ambulance.id))
+      ),
+      ...infra.ambulances.filter((ambulance) =>
+        activeAmbulanceIds.has(String(ambulance.id))
+      ).map((ambulance) => {
+        const activeAmbulance = activeAmbulances.find(
+          (item) => String(item.id) === String(ambulance.id)
+        );
+        return activeAmbulance ? { ...ambulance, ...activeAmbulance } : ambulance;
+      }),
+      ...activeAmbulances.filter(
+        (ambulance) =>
+          !infra.ambulances.some((item) => String(item.id) === String(ambulance.id))
+      ),
+    ];
+    simEmergencies = [
+      ...activeEmergencies,
+      ...infra.emergencies.filter(
+        (emergency) => !activeEmergencyIds.has(String(emergency.id))
+      ),
+    ];
+    simTrips = activeTrips;
+
     return infra;
   },
 
@@ -83,7 +165,16 @@ export const apiService = {
     if (backendOnlineCached) {
       try {
         const res = await fetchWithTimeout(`${API_BASE}/emergencies/`);
-        if (res.ok) return await res.json();
+        if (res.ok) {
+          const emergencies = await res.json();
+          const backendIds = new Set(emergencies.map((emergency) => String(emergency.id)));
+          const localEmergencies = simEmergencies.filter(
+            (emergency) =>
+              localEmergencyIds.has(String(emergency.id)) &&
+              !backendIds.has(String(emergency.id))
+          );
+          return [...emergencies, ...localEmergencies];
+        }
       } catch (_) {
         backendOnlineCached = false;
       }
@@ -92,7 +183,7 @@ export const apiService = {
   },
 
   async createEmergency(data) {
-    if (backendOnlineCached) {
+    if (backendOnlineCached && data.user_id != null) {
       try {
         const res = await fetchWithTimeout(`${API_BASE}/emergencies/`, {
           method: "POST",
@@ -131,6 +222,7 @@ export const apiService = {
       created_at: new Date().toISOString(),
     };
     simEmergencies = [newEmerg, ...simEmergencies];
+    localEmergencyIds.add(String(newEmerg.id));
     return newEmerg;
   },
 
@@ -148,8 +240,11 @@ export const apiService = {
     }
 
     simEmergencies = simEmergencies.map((e) =>
-      e.id === id ? { ...e, status } : e
+      String(e.id) === String(id) ? { ...e, status } : e
     );
+    if (status === "COMPLETED" || status === "CANCELLED") {
+      localEmergencyIds.delete(String(id));
+    }
     return simEmergencies.find((e) => e.id === id);
   },
 
@@ -158,7 +253,10 @@ export const apiService = {
     if (backendOnlineCached) {
       try {
         const res = await fetchWithTimeout(`${API_BASE}/ambulances/`);
-        if (res.ok) return await res.json();
+        if (res.ok) {
+          const ambulances = await res.json();
+          if (ambulances.length > 0) return ambulances;
+        }
       } catch (_) {
         backendOnlineCached = false;
       }
@@ -219,7 +317,10 @@ export const apiService = {
     if (backendOnlineCached) {
       try {
         const res = await fetchWithTimeout(`${API_BASE}/hospitals/`);
-        if (res.ok) return await res.json();
+        if (res.ok) {
+          const hospitals = await res.json();
+          if (hospitals.length > 0) return hospitals;
+        }
       } catch (_) {
         backendOnlineCached = false;
       }
@@ -261,6 +362,25 @@ export const apiService = {
 
   // Trips
   async getTrips() {
+    if (backendOnlineCached) {
+      try {
+        const res = await fetchWithTimeout(`${API_BASE}/trips/`);
+        if (res.ok) {
+          const trips = await res.json();
+          if (trips.length > 0) {
+            const backendIds = new Set(trips.map((trip) => String(trip.id)));
+            const localTrips = simTrips.filter(
+              (trip) =>
+                localTripIds.has(String(trip.id)) &&
+                !backendIds.has(String(trip.id))
+            );
+            return [...trips, ...localTrips];
+          }
+        }
+      } catch (_) {
+        backendOnlineCached = false;
+      }
+    }
     return simTrips;
   },
 
@@ -288,6 +408,7 @@ export const apiService = {
       estimated_time: 7.0,
     };
     simTrips = [newTrip, ...simTrips];
+    localTripIds.add(String(newTrip.id));
 
     // Mark ambulance as assigned
     this.updateAmbulanceStatus(payload.ambulance_id, "ASSIGNED");
@@ -310,13 +431,47 @@ export const apiService = {
       }
     }
 
-    simTrips = simTrips.map((t) => (t.id === tripId ? { ...t, status } : t));
-    return simTrips.find((t) => t.id === tripId);
+    simTrips = simTrips.map((t) =>
+      String(t.id) === String(tripId) ? { ...t, status } : t
+    );
+    if (status === "COMPLETED" || status === "CANCELLED") {
+      localTripIds.delete(String(tripId));
+    }
+    return simTrips.find((t) => String(t.id) === String(tripId));
   },
 
-  // Routes: Real turn-by-turn with OpenStreetMap OSRM fallback
-  async getRoute(originLat, originLng, destLat, destLng) {
-    // 1. Try local backend first
+  // Routes: prefer the fastest available alternative when selecting a hospital route.
+  async getRoute(originLat, originLng, destLat, destLng, preferLowTraffic = false) {
+    const fetchOsrmRoute = async (alternatives) => {
+      const alternativeParam = alternatives ? "&alternatives=3" : "";
+      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${originLng},${originLat};${destLng},${destLat}?overview=full&geometries=geojson${alternativeParam}`;
+      const osrmRes = await fetchWithTimeout(osrmUrl);
+      if (!osrmRes.ok) return null;
+
+      const osrmData = await osrmRes.json();
+      if (!osrmData.routes || osrmData.routes.length === 0) return null;
+      const route = alternatives
+        ? osrmData.routes.reduce((best, candidate) =>
+            candidate.duration < best.duration ? candidate : best
+          )
+        : osrmData.routes[0];
+      const coords = route.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+      return {
+        distance_km: parseFloat((route.distance / 1000).toFixed(2)),
+        duration_min: Math.max(3, Math.round(route.duration / 60)),
+        points: coords,
+        source: alternatives ? "osrm_fastest_available_alternative" : "osrm_real_streets",
+      };
+    };
+
+    if (preferLowTraffic) {
+      try {
+        const preferredRoute = await fetchOsrmRoute(true);
+        if (preferredRoute) return preferredRoute;
+      } catch (_) {}
+    }
+
+    // Try the local backend before the standard OSRM route.
     try {
       const res = await fetchWithTimeout(
         `${API_BASE}/routes/?origin_lat=${originLat}&origin_lng=${originLng}&dest_lat=${destLat}&dest_lng=${destLng}`
@@ -335,26 +490,13 @@ export const apiService = {
       }
     } catch (_) {}
 
-    // 2. Direct public OSRM OpenStreetMap routing (real city street polylines)
+    // Direct public OSRM OpenStreetMap routing.
     try {
-      const osrmUrl = `https://router.project-osrm.org/route/v1/driving/${originLng},${originLat};${destLng},${destLat}?overview=full&geometries=geojson`;
-      const osrmRes = await fetchWithTimeout(osrmUrl);
-      if (osrmRes.ok) {
-        const osrmData = await osrmRes.json();
-        if (osrmData.routes && osrmData.routes.length > 0) {
-          const r = osrmData.routes[0];
-          const coords = r.geometry.coordinates.map(([lng, lat]) => [lat, lng]);
-          return {
-            distance_km: parseFloat((r.distance / 1000).toFixed(2)),
-            duration_min: Math.max(3, Math.round(r.duration / 60)),
-            points: coords,
-            source: "osrm_real_streets",
-          };
-        }
-      }
+      const route = await fetchOsrmRoute(false);
+      if (route) return route;
     } catch (_) {}
 
-    // 3. Realistic curve interpolation fallback
+    // Realistic curve interpolation fallback.
     const dist = calculateDistanceKm(originLat, originLng, destLat, destLng);
     return {
       distance_km: dist,
@@ -362,6 +504,26 @@ export const apiService = {
       points: generateRoutePoints(originLat, originLng, destLat, destLng),
       source: "simulation_interpolated",
     };
+  },
+
+  // Authentication API
+  async login(email, password) {
+    return authRequest("login", { email, password }, "Invalid email or password");
+  },
+
+  async register(data) {
+    return authRequest("register", data, "Registration failed");
+  },
+
+  async getMe(token) {
+    const res = await fetch(`${API_BASE}/auth/me`, {
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!res.ok) return null;
+    return await res.json();
   },
 };
 

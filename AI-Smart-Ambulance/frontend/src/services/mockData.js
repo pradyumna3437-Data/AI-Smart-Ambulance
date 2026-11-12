@@ -208,10 +208,21 @@ export function generateLocalEmergencyInfrastructure(centerLat, centerLng, place
   // Check if close to Bhubaneswar (~40km)
   const distToBhubaneswar = calculateDistanceKm(centerLat, centerLng, BHUBANESWAR_CENTER.lat, BHUBANESWAR_CENTER.lng);
   if (distToBhubaneswar <= 35) {
+    const ambulanceOffsets = [
+      [0.008, 0.006],
+      [-0.011, -0.008],
+      [0.014, -0.012],
+      [-0.007, 0.015],
+    ];
+
     return {
       center: { lat: centerLat, lng: centerLng, zoom: 13, name: "Bhubaneswar Metropolitan Region" },
       hospitals: BHUBANESWAR_HOSPITALS,
-      ambulances: BHUBANESWAR_AMBULANCES,
+      ambulances: BHUBANESWAR_AMBULANCES.map((ambulance, index) => ({
+        ...ambulance,
+        latitude: parseFloat((centerLat + ambulanceOffsets[index][0]).toFixed(4)),
+        longitude: parseFloat((centerLng + ambulanceOffsets[index][1]).toFixed(4)),
+      })),
       emergencies: BHUBANESWAR_EMERGENCIES,
     };
   }

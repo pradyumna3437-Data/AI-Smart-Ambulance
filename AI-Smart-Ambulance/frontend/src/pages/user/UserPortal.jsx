@@ -34,13 +34,10 @@ export default function UserPortal() {
     fetchCurrentLocation,
     isDetectingLocation,
     reverseGeocode,
+    currentUser,
   } = useEmergency();
 
-  // If citizen has an active emergency or booking, show the dedicated Ambulance Tracking feature!
-  if (citizenEmergency || activeBooking) {
-    return <AmbulanceTracking />;
-  }
-
+  // ALL hooks must be called unconditionally before any early return
   const [formData, setFormData] = useState({
     caller_name: "Rahul Mohanty",
     caller_phone: "+91 94370 12345",
@@ -61,9 +58,16 @@ export default function UserPortal() {
         latitude: userLocation.lat,
         longitude: userLocation.lng,
         address_hint: userLocation.address,
+        caller_name: currentUser?.name || prev.caller_name,
+        caller_phone: currentUser?.phone || prev.caller_phone,
       }));
     }
-  }, [userLocation, citizenEmergency]);
+  }, [userLocation, citizenEmergency, currentUser]);
+
+  // If citizen has an active emergency or booking, show the dedicated Ambulance Tracking feature!
+  if (citizenEmergency || activeBooking) {
+    return <AmbulanceTracking />;
+  }
 
   // Quick emergency types
   const categories = [

@@ -439,6 +439,12 @@ html, body {
   border: 1px solid rgba(239, 68, 68, 0.3);
 }
 
+.badge-offline {
+  background: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
 /* Form Controls */
 .form-group {
   display: flex;
@@ -489,39 +495,78 @@ html, body {
   font-family: var(--font-sans) !important;
 }
 
+/* Fix Leaflet DivIcon default border & background */
+.leaflet-div-icon,
+.custom-div-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
 /* Custom Marker Pins */
 .custom-pin-ambulance {
-  width: 38px;
-  height: 38px;
+  width: 42px;
+  height: 42px;
   border-radius: 50%;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 0 15px rgba(0, 0, 0, 0.6);
-  border: 2px solid #ffffff;
+  box-shadow: 0 0 18px rgba(0, 0, 0, 0.7);
+  border: 2.5px solid #ffffff;
   color: #ffffff;
   cursor: pointer;
-  transition: transform 0.2s;
+  position: relative;
+  transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.custom-pin-ambulance svg {
+  display: block;
+  filter: drop-shadow(0 1px 2px rgba(0,0,0,0.5));
 }
 
 .custom-pin-ambulance:hover {
-  transform: scale(1.15);
+  transform: scale(1.22);
+  z-index: 9999 !important;
 }
 
 .custom-pin-ambulance.available {
-  background: #10b981;
-  box-shadow: 0 0 16px rgba(16, 185, 129, 0.6);
+  background: linear-gradient(135deg, #10b981, #059669);
+  box-shadow: 0 0 18px rgba(16, 185, 129, 0.75);
 }
 
 .custom-pin-ambulance.assigned {
-  background: #f59e0b;
-  box-shadow: 0 0 16px rgba(245, 158, 11, 0.6);
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  box-shadow: 0 0 18px rgba(245, 158, 11, 0.75);
 }
 
 .custom-pin-ambulance.en-route {
-  background: #ef4444;
-  box-shadow: 0 0 18px rgba(239, 68, 68, 0.8);
+  background: linear-gradient(135deg, #ef4444, #dc2626);
+  box-shadow: 0 0 22px rgba(239, 68, 68, 0.9);
   animation: siren-flash 1.2s infinite alternate;
+}
+
+.custom-pin-ambulance.offline {
+  background: linear-gradient(135deg, #64748b, #475569);
+  box-shadow: 0 0 12px rgba(100, 116, 139, 0.5);
+  border-color: #94a3b8;
+}
+
+.amb-pin-badge {
+  position: absolute;
+  bottom: -11px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(15, 23, 42, 0.95);
+  color: #f8fafc;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.62rem;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0,0,0,0.6);
 }
 
 .custom-pin-emergency {
@@ -984,5 +1029,231 @@ html, body {
     transform: scale(1);
     opacity: 1;
   }
+}
+
+/* =========================================================
+   Utility — spin animation for loading icons
+   ========================================================= */
+@keyframes spin-360 {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.spin-anim {
+  animation: spin-360 0.8s linear infinite;
+}
+
+/* =========================================================
+   Auth Modal — Login / Register
+   ========================================================= */
+.auth-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 3000;
+  background: rgba(4, 7, 15, 0.82);
+  backdrop-filter: blur(16px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.25rem;
+  animation: overlay-fade-in 0.2s ease-out;
+}
+
+.auth-modal-card {
+  width: 100%;
+  max-width: 460px;
+  background: rgba(13, 20, 38, 0.97);
+  border: 1px solid rgba(56, 189, 248, 0.25);
+  border-radius: var(--radius-xl);
+  padding: 2rem;
+  box-shadow: 0 0 60px rgba(6, 182, 212, 0.18), var(--shadow-lg);
+  position: relative;
+  animation: modal-pop 0.25s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  overflow: hidden;
+}
+
+.auth-modal-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #06b6d4, #8b5cf6, #ef4444);
+  border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+}
+
+.auth-tabs {
+  display: flex;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  margin-bottom: 1.5rem;
+  border: 1px solid var(--border-subtle);
+}
+
+.auth-tab-btn {
+  flex: 1;
+  padding: 0.5rem;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-family: var(--font-sans);
+}
+
+.auth-tab-btn.active {
+  background: rgba(6, 182, 212, 0.18);
+  color: #38bdf8;
+  border: 1px solid rgba(6, 182, 212, 0.35);
+}
+
+.auth-tab-btn:hover:not(.active) {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.auth-role-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.auth-role-btn {
+  padding: 0.65rem 0.5rem;
+  border: 1.5px solid var(--border-subtle);
+  background: transparent;
+  border-radius: var(--radius-md);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 5px;
+  transition: all var(--transition-fast);
+  font-family: var(--font-sans);
+}
+
+.auth-role-btn.active {
+  border-color: rgba(6, 182, 212, 0.5);
+  background: rgba(6, 182, 212, 0.1);
+  color: #38bdf8;
+}
+
+.auth-role-btn:hover:not(.active) {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.04);
+}
+
+.auth-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.auth-input-wrap .form-input {
+  padding-left: 2.4rem;
+  width: 100%;
+}
+
+.auth-input-icon {
+  position: absolute;
+  left: 0.75rem;
+  color: var(--text-muted);
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+}
+
+.auth-input-eye {
+  position: absolute;
+  right: 0.75rem;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  padding: 0;
+}
+
+.auth-input-eye:hover {
+  color: var(--text-primary);
+}
+
+.auth-alert {
+  padding: 0.65rem 0.9rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.82rem;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.auth-alert.error {
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid rgba(239, 68, 68, 0.3);
+  color: #fca5a5;
+}
+
+.auth-alert.success {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  color: #6ee7b7;
+}
+
+.auth-submit-btn {
+  width: 100%;
+  padding: 0.75rem;
+  border: none;
+  border-radius: var(--radius-md);
+  background: linear-gradient(135deg, #0ea5e9, #0284c7);
+  color: #fff;
+  font-size: 0.9rem;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: all var(--transition-fast);
+  font-family: var(--font-sans);
+  letter-spacing: 0.03em;
+}
+
+.auth-submit-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, #38bdf8, #0ea5e9);
+  box-shadow: 0 0 20px rgba(14, 165, 233, 0.4);
+  transform: translateY(-1px);
+}
+
+.auth-submit-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.auth-demo-strip {
+  margin-top: 1rem;
+  padding: 0.65rem 0.75rem;
+  background: rgba(139, 92, 246, 0.08);
+  border: 1px solid rgba(139, 92, 246, 0.25);
+  border-radius: var(--radius-md);
+  font-size: 0.75rem;
+  color: #c4b5fd;
+}
+
+.auth-demo-strip strong {
+  color: #a78bfa;
 }
 

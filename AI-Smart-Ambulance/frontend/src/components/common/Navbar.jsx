@@ -10,6 +10,9 @@ import {
   Cpu,
   MapPin,
   Crosshair,
+  User,
+  LogIn,
+  LogOut,
 } from "lucide-react";
 
 export default function Navbar({ onOpenDirectSos }) {
@@ -26,6 +29,9 @@ export default function Navbar({ onOpenDirectSos }) {
     isDetectingLocation,
     activeBooking,
     citizenEmergency,
+    currentUser,
+    setIsAuthModalOpen,
+    logoutUser,
   } = useEmergency();
 
   const handleSimulateRandomEmergency = () => {
@@ -272,6 +278,99 @@ export default function Navbar({ onOpenDirectSos }) {
           <span className="status-dot"></span>
           <span>{backendOnline ? "API Live" : "Sim Mode"}</span>
         </div>
+
+        {/* User Auth Profile / Login Button */}
+        {currentUser ? (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              background: "rgba(15, 23, 42, 0.8)",
+              border: "1px solid rgba(56, 189, 248, 0.3)",
+              padding: "0.22rem 0.6rem",
+              borderRadius: "20px",
+            }}
+          >
+            <div
+              style={{
+                width: "24px",
+                height: "24px",
+                borderRadius: "50%",
+                background:
+                  currentUser.role === "ADMIN"
+                    ? "#f59e0b"
+                    : currentUser.role === "DRIVER"
+                    ? "#10b981"
+                    : "#0284c7",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                color: "#fff",
+                fontWeight: "bold",
+                fontSize: "0.72rem",
+              }}
+            >
+              {currentUser.name ? currentUser.name[0].toUpperCase() : "U"}
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", lineHeight: 1.1 }}>
+              <span
+                style={{
+                  fontSize: "0.76rem",
+                  fontWeight: 600,
+                  color: "#f8fafc",
+                  maxWidth: "90px",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {currentUser.name}
+              </span>
+              <span style={{ fontSize: "0.62rem", color: "#94a3b8" }}>
+                {currentUser.role}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={logoutUser}
+              className="btn btn-outline"
+              style={{
+                padding: "0.2rem 0.4rem",
+                fontSize: "0.68rem",
+                borderRadius: "8px",
+                border: "none",
+                color: "#ef4444",
+                background: "rgba(239, 68, 68, 0.15)",
+                cursor: "pointer",
+              }}
+              title="Sign Out"
+            >
+              <LogOut size={12} />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            className="btn btn-outline"
+            onClick={() => setIsAuthModalOpen(true)}
+            style={{
+              padding: "0.38rem 0.75rem",
+              fontSize: "0.76rem",
+              borderColor: "rgba(56, 189, 248, 0.4)",
+              color: "#38bdf8",
+              background: "rgba(56, 189, 248, 0.1)",
+              borderRadius: "20px",
+              display: "flex",
+              alignItems: "center",
+              gap: "5px",
+            }}
+            title="Sign In or Create Account"
+          >
+            <LogIn size={13} color="#38bdf8" />
+            <span>Sign In / Register</span>
+          </button>
+        )}
       </div>
     </header>
   );

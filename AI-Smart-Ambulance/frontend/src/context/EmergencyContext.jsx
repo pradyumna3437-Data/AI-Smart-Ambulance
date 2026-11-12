@@ -36,6 +36,69 @@ export function EmergencyProvider({ children }) {
   // Active route polyline for the map [ [lat, lng], ... ]
   const [activeRoute, setActiveRoute] = useState(null);
 
+  // Authentication State
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem("ambulance_user");
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [authToken, setAuthToken] = useState(() => localStorage.getItem("ambulance_token") || null);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+
+  // Restore authenticated user profile on mount
+  useEffect(() => {
+    if (authToken && !currentUser) {
+      apiService
+        .getMe(authToken)
+        .then((user) => {
+          if (user) {
+            setCurrentUser(user);
+            localStorage.setItem("ambulance_user", JSON.stringify(user));
+          } else {
+            localStorage.removeItem("ambulance_token");
+            localStorage.removeItem("ambulance_user");
+            setAuthToken(null);
+            setCurrentUser(null);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [authToken, currentUser]);
+
+  const loginUser = async (email, password) => {
+    const res = await apiService.login(email, password);
+    setAuthToken(res.access_token);
+    localStorage.setItem("ambulance_token", res.access_token);
+    const userObj = res.user || (await apiService.getMe(res.access_token));
+    if (userObj) {
+      setCurrentUser(userObj);
+      localStorage.setItem("ambulance_user", JSON.stringify(userObj));
+      if (userObj.role === "DRIVER") setCurrentRole("DRIVER");
+      else if (userObj.role === "ADMIN") setCurrentRole("ADMIN");
+      else setCurrentRole("CITIZEN");
+    }
+    return res;
+  };
+
+  const registerUser = async (data) => {
+    const user = await apiService.register(data);
+    if (data.password) {
+      await loginUser(data.email, data.password);
+    }
+    return user;
+  };
+
+  const logoutUser = () => {
+    localStorage.removeItem("ambulance_token");
+    localStorage.removeItem("ambulance_user");
+    setAuthToken(null);
+    setCurrentUser(null);
+    setCurrentRole("CITIZEN");
+  };
+
   const refreshAll = useCallback(async () => {
     try {
       const isOnline = await apiService.checkHealth();
@@ -109,10 +172,13 @@ export function EmergencyProvider({ children }) {
     return `Location (${lat.toFixed(4)}, ${lng.toFixed(4)})`;
   };
 
+  const [locationPermissionDenied, setLocationPermissionDenied] = useState(false);
+
   // High-reliability multi-tier location detection (Browser GPS -> IP Geolocation Fallback)
   const fetchCurrentLocation = useCallback(
     async (showPrompt = false) => {
       setIsDetectingLocation(true);
+      setLocationPermissionDenied(false);
 
       const applyCoords = async (lat, lng, label = null, isGps = false) => {
         const address = label || (await reverseGeocode(lat, lng));
@@ -121,50 +187,100 @@ export function EmergencyProvider({ children }) {
         return { success: true, lat, lng, address, isGps };
       };
 
-      // 1. Try Browser Geolocation first
-      if ("geolocation" in navigator) {
+      // Helper for fast multi-source IP Geolocation
+      const fetchIpLocation = async () => {
+        const fetchers = [
+          async () => {
+            const res = await fetch("https://ipapi.co/json/");
+            if (!res.ok) throw new Error("ipapi failed");
+            const d = await res.json();
+            if (d.latitude && d.longitude) {
+              return {
+                lat: parseFloat(Number(d.latitude).toFixed(4)),
+                lng: parseFloat(Number(d.longitude).toFixed(4)),
+                label: `${d.city || d.region || "Local Area"}, ${d.region || d.country_name || "Odisha"}`,
+              };
+            }
+            throw new Error("No coords");
+          },
+          async () => {
+            const res = await fetch("https://api.bigdatacloud.net/data/reverse-geocode-client");
+            if (!res.ok) throw new Error("bigdatacloud failed");
+            const d = await res.json();
+            if (d.latitude && d.longitude) {
+              return {
+                lat: parseFloat(Number(d.latitude).toFixed(4)),
+                lng: parseFloat(Number(d.longitude).toFixed(4)),
+                label: `${d.city || d.locality || "Local Area"}, ${d.principalSubdivision || "Odisha"}`,
+              };
+            }
+            throw new Error("No coords");
+          },
+          async () => {
+            const res = await fetch("https://ipwho.is/");
+            if (!res.ok) throw new Error("ipwho failed");
+            const d = await res.json();
+            if (d.latitude && d.longitude) {
+              return {
+                lat: parseFloat(Number(d.latitude).toFixed(4)),
+                lng: parseFloat(Number(d.longitude).toFixed(4)),
+                label: `${d.city || d.region || "Local Area"}, ${d.region || "Odisha"}`,
+              };
+            }
+            throw new Error("No coords");
+          },
+        ];
+
+        for (const fetcher of fetchers) {
+          try {
+            const loc = await fetcher();
+            if (loc && !isNaN(loc.lat) && !isNaN(loc.lng)) return loc;
+          } catch (_) {}
+        }
+        return null;
+      };
+
+      // 1. Try Browser High-Accuracy Geolocation
+      if (typeof navigator !== "undefined" && "geolocation" in navigator) {
         try {
-          const pos = await new Promise((resolve, reject) => {
+          const gpsPromise = new Promise((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(
-              resolve,
-              () => {
-                // Secondary low-accuracy attempt
-                navigator.geolocation.getCurrentPosition(resolve, reject, {
-                  enableHighAccuracy: false,
-                  timeout: 4000,
-                  maximumAge: 60000,
-                });
+              (pos) => resolve(pos),
+              (err) => {
+                if (err.code === 1) {
+                  // User explicitly denied permission
+                  setLocationPermissionDenied(true);
+                }
+                // Try low accuracy before failing
+                navigator.geolocation.getCurrentPosition(
+                  (pos) => resolve(pos),
+                  (e2) => reject(e2),
+                  { enableHighAccuracy: false, timeout: 6000, maximumAge: 0 }
+                );
               },
-              { enableHighAccuracy: true, timeout: 5000, maximumAge: 30000 }
+              { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
             );
           });
 
+          const pos = await gpsPromise;
           if (pos && pos.coords) {
             const lat = parseFloat(pos.coords.latitude.toFixed(4));
             const lng = parseFloat(pos.coords.longitude.toFixed(4));
             return await applyCoords(lat, lng, null, true);
           }
         } catch (gpsErr) {
-          console.warn("Browser GPS unavailable or timed out; trying IP network geolocation fallback:", gpsErr);
+          console.warn("Browser GPS unavailable; switching to high-accuracy IP Geolocation fallback:", gpsErr);
         }
       }
 
-      // 2. IP Network Geolocation (Zero-permission instant fallback anywhere in India/World)
+      // 2. IP Geolocation (Zero-permission instant fallback anywhere)
       try {
-        const res = await fetch("https://api.bigdatacloud.net/data/reverse-geocode-client");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.latitude && data.longitude) {
-            const lat = parseFloat(Number(data.latitude).toFixed(4));
-            const lng = parseFloat(Number(data.longitude).toFixed(4));
-            const city = data.city || data.locality || "Bhubaneswar";
-            const state = data.principalSubdivision || "Odisha";
-            const label = `${city}, ${state}`;
-            return await applyCoords(lat, lng, label, false);
-          }
+        const ipLoc = await fetchIpLocation();
+        if (ipLoc) {
+          return await applyCoords(ipLoc.lat, ipLoc.lng, ipLoc.label, false);
         }
       } catch (netErr) {
-        console.warn("Network IP geolocation failed:", netErr);
+        console.warn("Network IP Geolocation failed:", netErr);
       }
 
       // 3. Fallback to Bhubaneswar City Center
@@ -193,7 +309,19 @@ export function EmergencyProvider({ children }) {
 
   // Citizen triggers an emergency & books ambulance
   const triggerCitizenEmergency = async (formData) => {
-    const newEmergency = await apiService.createEmergency(formData);
+    apiService.setSimulationLocation(
+      formData.latitude,
+      formData.longitude,
+      formData.address_hint || userLocation.address
+    );
+    const emergencyData = {
+      ...formData,
+      user_id:
+        currentUser && currentUser.id != null
+          ? currentUser.id
+          : formData.user_id,
+    };
+    const newEmergency = await apiService.createEmergency(emergencyData);
     setCitizenEmergencyId(newEmergency.id);
     setSelectedEmergencyId(newEmergency.id);
     setMapFocus([formData.latitude, formData.longitude]);
@@ -203,6 +331,9 @@ export function EmergencyProvider({ children }) {
       formData.latitude,
       formData.longitude
     );
+    if (recommendedAmb?.id != null) {
+      setDriverVehicleId(recommendedAmb.id);
+    }
     const recommendedHosp = await apiService.recommendHospital(
       formData.latitude,
       formData.longitude,
@@ -276,6 +407,7 @@ export function EmergencyProvider({ children }) {
 
   // Dispatch an ambulance from admin console
   const dispatchAmbulance = async (emergencyId, ambulanceId, hospitalId) => {
+    setDriverVehicleId(ambulanceId);
     const trip = await apiService.createTrip({
       emergency_id: emergencyId,
       ambulance_id: ambulanceId,
@@ -303,8 +435,9 @@ export function EmergencyProvider({ children }) {
 
   // Driver advances trip status
   const advanceTripStatus = async (tripId, newStatus) => {
-    await apiService.updateTripStatus(tripId, newStatus);
-    const trip = trips.find((t) => t.id === tripId);
+    const updatedTrip = await apiService.updateTripStatus(tripId, newStatus);
+    const trip =
+      updatedTrip || trips.find((t) => String(t.id) === String(tripId));
     if (trip) {
       await apiService.updateEmergencyStatus(trip.emergency_id, newStatus);
       if (newStatus === "COMPLETED") {
@@ -315,6 +448,46 @@ export function EmergencyProvider({ children }) {
       }
     }
     await refreshAll();
+  };
+
+  const startHospitalTransport = async (tripId) => {
+    const trip = trips.find((t) => String(t.id) === String(tripId));
+    if (!trip) throw new Error("The active trip could not be found.");
+
+    const emergency = emergencies.find(
+      (item) => String(item.id) === String(trip.emergency_id)
+    );
+    if (!emergency) throw new Error("The patient location could not be found.");
+
+    const hospital =
+      hospitals.find((item) => String(item.id) === String(trip.hospital_id)) ||
+      (await apiService.recommendHospital(
+        emergency.latitude,
+        emergency.longitude,
+        emergency.severity === "CRITICAL",
+        emergency.severity === "CRITICAL"
+      ));
+    if (!hospital) throw new Error("No suitable hospital is available.");
+
+    const routeData = await apiService.getRoute(
+      emergency.latitude,
+      emergency.longitude,
+      hospital.latitude,
+      hospital.longitude,
+      true
+    );
+    if (!routeData?.points?.length) {
+      throw new Error("Could not calculate a route to the hospital.");
+    }
+
+    await apiService.updateTripStatus(tripId, "PATIENT_PICKED_UP");
+    await apiService.updateEmergencyStatus(trip.emergency_id, "PATIENT_PICKED_UP");
+    setActiveRoute(routeData.points);
+    await apiService.updateTripStatus(tripId, "EN_ROUTE_TO_HOSPITAL");
+    await apiService.updateEmergencyStatus(trip.emergency_id, "EN_ROUTE_TO_HOSPITAL");
+    await apiService.updateAmbulanceStatus(trip.ambulance_id, "EN_ROUTE");
+    await refreshAll();
+    return { hospital, routeData };
   };
 
   // Selected emergency object
@@ -329,19 +502,23 @@ export function EmergencyProvider({ children }) {
 
   // Find active trip for driver
   const driverAmbulance =
-    ambulances.find((a) => a.id === driverVehicleId) || ambulances[0] || null;
+    ambulances.find((a) => String(a.id) === String(driverVehicleId)) ||
+    ambulances[0] ||
+    null;
 
   const driverActiveTrip =
     trips.find(
-      (t) => t.ambulance_id === driverAmbulance?.id && t.status !== "COMPLETED"
+      (t) =>
+        String(t.ambulance_id) === String(driverAmbulance?.id) &&
+        !["COMPLETED", "CANCELLED"].includes(t.status)
     ) || null;
 
   const driverEmergency = driverActiveTrip
-    ? emergencies.find((e) => e.id === driverActiveTrip.emergency_id)
+    ? emergencies.find((e) => String(e.id) === String(driverActiveTrip.emergency_id))
     : null;
 
   const driverHospital = driverActiveTrip
-    ? hospitals.find((h) => h.id === driverActiveTrip.hospital_id)
+    ? hospitals.find((h) => String(h.id) === String(driverActiveTrip.hospital_id))
     : null;
 
   return (
@@ -357,6 +534,7 @@ export function EmergencyProvider({ children }) {
         detectUserGps: fetchCurrentLocation,
         fetchCurrentLocation,
         isDetectingLocation,
+        locationPermissionDenied,
         reverseGeocode,
         mapFocus,
         setMapFocus,
@@ -381,9 +559,17 @@ export function EmergencyProvider({ children }) {
         driverHospital,
         dispatchAmbulance,
         advanceTripStatus,
+        startHospitalTransport,
         activeRoute,
         setActiveRoute,
         refreshAll,
+        currentUser,
+        authToken,
+        isAuthModalOpen,
+        setIsAuthModalOpen,
+        loginUser,
+        registerUser,
+        logoutUser,
       }}
     >
       {children}

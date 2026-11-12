@@ -13,5 +13,6 @@ Core planned endpoints:
 - PATCH /api/ambulances/{id}/status
 - GET /api/hospitals
 - POST /api/trips
+- GET /api/trips
 - GET /api/trips/{id}
 - GET /api/routes

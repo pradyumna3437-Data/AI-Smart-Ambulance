@@ -73,7 +73,13 @@ class EmergencySoundPlayer {
 }
 
 export default function DirectSosModal({ isOpen, onClose }) {
-  const { triggerCitizenEmergency, setCurrentRole, userLocation, reverseGeocode } = useEmergency();
+  const {
+    triggerCitizenEmergency,
+    setCurrentRole,
+    userLocation,
+    setUserLocationAndCluster,
+    reverseGeocode,
+  } = useEmergency();
 
   const [countdown, setCountdown] = useState(3);
   const [isMuted, setIsMuted] = useState(false);
@@ -86,6 +92,13 @@ export default function DirectSosModal({ isOpen, onClose }) {
   const [isComplete, setIsComplete] = useState(false);
 
   const soundPlayerRef = useRef(null);
+  const dispatchLocationRef = useRef({
+    lat: userLocation?.lat || 20.2961,
+    lng: userLocation?.lng || 85.8245,
+    address: userLocation?.address || "Bhubaneswar, Odisha",
+    isGpsDetected: Boolean(userLocation?.isGpsDetected),
+  });
+  const dispatchStartedRef = useRef(false);
 
   // Initialize sound player instance
   useEffect(() => {
@@ -105,11 +118,19 @@ export default function DirectSosModal({ isOpen, onClose }) {
     setCountdown(3);
     setIsTransmitting(false);
     setIsComplete(false);
+    dispatchStartedRef.current = false;
 
     // Initial sync with active userLocation
     if (userLocation) {
-      setCoords({ lat: userLocation.lat, lng: userLocation.lng });
-      setAddressText(userLocation.address || "Active Location Pinpoint");
+      const location = {
+        lat: userLocation.lat,
+        lng: userLocation.lng,
+        address: userLocation.address || "Active Location Pinpoint",
+        isGpsDetected: Boolean(userLocation.isGpsDetected),
+      };
+      dispatchLocationRef.current = location;
+      setCoords({ lat: location.lat, lng: location.lng });
+      setAddressText(location.address);
     }
 
     if (!isMuted) {
@@ -122,16 +143,30 @@ export default function DirectSosModal({ isOpen, onClose }) {
         async (pos) => {
           const lat = parseFloat(pos.coords.latitude.toFixed(4));
           const lng = parseFloat(pos.coords.longitude.toFixed(4));
+          dispatchLocationRef.current = {
+            ...dispatchLocationRef.current,
+            lat,
+            lng,
+            address: "Exact Live GPS Acquired",
+            isGpsDetected: true,
+          };
           setCoords({ lat, lng });
+          setAddressText("Exact Live GPS Acquired");
           const addr = await reverseGeocode(lat, lng);
+          dispatchLocationRef.current.address = addr || "Exact Live GPS Acquired";
           setAddressText(addr || "Exact Live GPS Acquired");
+          await setUserLocationAndCluster(lat, lng, addr || "Exact Live GPS Acquired", true);
         },
         () => {
-          setCoords({
+          const location = {
             lat: userLocation?.lat || 20.2961,
             lng: userLocation?.lng || 85.8245,
-          });
-          setAddressText(userLocation?.address || "Bhubaneswar, Odisha");
+            address: userLocation?.address || "Bhubaneswar, Odisha",
+            isGpsDetected: false,
+          };
+          dispatchLocationRef.current = location;
+          setCoords({ lat: location.lat, lng: location.lng });
+          setAddressText(location.address);
         },
         { enableHighAccuracy: true, timeout: 4000 }
       );
@@ -166,6 +201,8 @@ export default function DirectSosModal({ isOpen, onClose }) {
   };
 
   const executeSosDispatch = async () => {
+    if (dispatchStartedRef.current) return;
+    dispatchStartedRef.current = true;
     setIsTransmitting(true);
     soundPlayerRef.current?.stop();
 
@@ -175,8 +212,9 @@ export default function DirectSosModal({ isOpen, onClose }) {
         caller_phone: "+91 99999 10800",
         emergency_type: "CRITICAL 1-TAP DIRECT SOS BEACON",
         severity: "CRITICAL",
-        latitude: coords.lat,
-        longitude: coords.lng,
+        latitude: dispatchLocationRef.current.lat,
+        longitude: dispatchLocationRef.current.lng,
+        address_hint: dispatchLocationRef.current.address,
       });
 
       setIsComplete(true);
@@ -189,6 +227,7 @@ export default function DirectSosModal({ isOpen, onClose }) {
     } catch (err) {
       console.error("Direct SOS dispatch error:", err);
       setIsTransmitting(false);
+      dispatchStartedRef.current = false;
     }
   };
 
